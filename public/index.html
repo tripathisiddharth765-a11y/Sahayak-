@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>AEGIS · Disaster Response Command</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="/socket.io/socket.io.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 :root {
@@ -1114,7 +1115,7 @@ hr { border: none; border-top: 1px solid var(--border); }
 .timeline-event { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .tl-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
 .tl-year { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text3); width: 36px; flex-shrink: 0; }
-input[type=range] { -webkit-appearance: none; width: 100%; height: 4px; background: rgba(255,255,255,0.08); border-radius: 99px; outline: none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 100%; height: 4px; background: rgba(255,255,255,0.08); border-radius: 99px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--blue); cursor: pointer; border: 2px solid rgba(74,143,212,0.4); }
 </style>
 
@@ -2066,12 +2067,112 @@ function switchFeedTab(tab, btn) {
 }
 
 // ── Drone data per drone ──
-const droneData = {
+let droneData = {
   'ALPHA-1': { lat: 24.8360, lon: 91.9170, alt: 120, spd: 8.4, hdg: 214, bat: 87, sig: -62, name:'ALPHA-1', mode:'AUTO' },
   'BRAVO-2': { lat: 24.8341, lon: 91.9203, alt: 85,  spd: 6.1, hdg: 178, bat: 54, sig: -70, name:'BRAVO-2', mode:'AUTO' },
   'ECHO-3':  { lat: 24.8285, lon: 91.9115, alt: 200, spd: 9.8, hdg: 310, bat: 22, sig: -76, name:'ECHO-3',  mode:'RTL'  },
-  'DELTA-4': { lat: 24.8410, lon: 91.9248, alt: 150, spd: 7.3, hdg: 090, bat: 91, sig: -58, name:'DELTA-4', mode:'AUTO' },
+  'DELTA-4': { lat: 24.8410, lon: 91.9248, alt: 150, spd: 7.3, hdg: 90, bat: 91, sig: -58, name:'DELTA-4', mode:'AUTO' },
 };
+
+// --- Socket.IO Integration ---
+const socket = io();
+
+socket.on('telemetry_update', (data) => {
+  droneData = data;
+  
+  if (simInterval) { // only update drawing if feed is open
+    const d = droneData[currentDrone];
+    if (d) {
+      trail.push({ lat: d.lat, lon: d.lon });
+      if (trail.length > MAX_TRAIL) trail.shift();
+      altHistory.push(Math.round(d.alt));
+      if (altHistory.length > 60) altHistory.shift();
+    }
+    updateAllTelemetry();
+    drawVideoCanvas();
+    drawAltGraph();
+    updateMiniGps();
+    drawGpsCanvas();
+    
+    // update drone fleet view in sidebar
+    updateSidebarFleet();
+  }
+});
+
+socket.on('sensor_update', (data) => {
+   updateSensors(data);
+});
+
+function updateSensors(data) {
+  // Update sidebar AQI
+  const aqiEl = document.querySelector('.sens-row:nth-child(2) .pill');
+  if (aqiEl) {
+    aqiEl.textContent = `${data.aqi} — ${data.aqi > 300 ? 'Hazardous' : (data.aqi > 150 ? 'Unhealthy' : 'Moderate')}`;
+    aqiEl.className = `pill ${data.aqi > 300 ? 'pill-red' : (data.aqi > 150 ? 'pill-amber' : 'pill-green')}`;
+    aqiEl.style.fontSize = '10px';
+    const aqiBar = document.querySelector('.sens-row:nth-child(2) .bar-fill');
+    if (aqiBar) {
+      aqiBar.style.width = Math.min(100, data.aqi / 5) + '%';
+      aqiBar.style.background = data.aqi > 300 ? 'var(--red)' : (data.aqi > 150 ? 'var(--amber)' : 'var(--green)');
+    }
+  }
+
+  // Update sidebar Flood
+  const floodEl = document.querySelector('.sens-row:nth-child(3) .pill');
+  if (floodEl) {
+    floodEl.textContent = `+${data.floodLevel.toFixed(1)} m — ${data.floodLevel > 3.0 ? 'Critical' : (data.floodLevel > 1.5 ? 'Warning' : 'Normal')}`;
+    floodEl.className = `pill ${data.floodLevel > 3.0 ? 'pill-red' : (data.floodLevel > 1.5 ? 'pill-amber' : 'pill-green')}`;
+    floodEl.style.fontSize = '10px';
+    const floodBar = document.querySelector('.sens-row:nth-child(3) .bar-fill');
+    if (floodBar) {
+      floodBar.style.width = Math.min(100, (data.floodLevel / 5) * 100) + '%';
+      floodBar.style.background = data.floodLevel > 3.0 ? 'var(--red)' : (data.floodLevel > 1.5 ? 'var(--amber)' : 'var(--green)');
+    }
+  }
+  
+  // Update Network
+  const netEl = document.querySelector('.sens-row:nth-child(5) .pill');
+  if (netEl) {
+     netEl.textContent = `${data.network}% Uptime`;
+     netEl.className = `pill ${data.network > 90 ? 'pill-green' : 'pill-amber'}`;
+     netEl.style.fontSize = '10px';
+     const netBar = document.querySelector('.sens-row:nth-child(5) .bar-fill');
+     if (netBar) {
+        netBar.style.width = `${data.network}%`;
+        netBar.style.background = data.network > 90 ? 'var(--green)' : 'var(--amber)';
+     }
+  }
+}
+
+function updateSidebarFleet() {
+   // Update fleet percentages in the sidebar (simple implementation targeting standard drone IDs)
+   const droneRows = document.querySelectorAll('.drone-row');
+   droneRows.forEach(row => {
+      const titleEl = row.querySelector('span[style*="font-weight:600"]');
+      if (titleEl) {
+          const droneId = titleEl.textContent.trim();
+          if (droneData[droneId]) {
+              const d = droneData[droneId];
+              const pillEl = row.querySelector('.pill');
+              if (pillEl) {
+                 if (d.bat < 25) { pillEl.className = 'pill pill-amber'; pillEl.textContent = 'Returning'; }
+                 else { pillEl.className = 'pill pill-green'; pillEl.textContent = 'Active'; }
+              }
+              const batValEl = row.querySelector('strong');
+              if (batValEl) {
+                 batValEl.textContent = `${d.bat}%`;
+                 batValEl.style.color = d.bat > 50 ? '#6ED4A0' : d.bat > 25 ? '#DBA55A' : '#E05252';
+              }
+              const barFillEl = row.querySelector('.bar-fill');
+              if (barFillEl) {
+                 barFillEl.style.width = `${d.bat}%`;
+                 barFillEl.style.background = d.bat > 50 ? '#3CB87A' : d.bat > 25 ? '#D4882A' : '#E05252';
+              }
+          }
+      }
+   });
+}
+
 
 let currentDrone = 'ALPHA-1';
 let simInterval = null;
@@ -2159,40 +2260,13 @@ function safe(id, val, color) {
   if (color) el.style.color = color;
 }
 
-// Simulate telemetry drift
-let altHistory = Array(60).fill(120);
+// Removed local simulated drift since server handles it over websockets
 function tick() {
   const d = droneData[currentDrone];
   if (!d) return;
 
-  // Gentle drift
-  d.lat += (Math.random() - 0.5) * 0.00008;
-  d.lon += (Math.random() - 0.5) * 0.00008;
-  d.alt += (Math.random() - 0.48) * 0.6;
-  d.alt = Math.max(30, Math.min(250, d.alt));
-  d.spd += (Math.random() - 0.5) * 0.3;
-  d.spd = Math.max(0, Math.min(20, d.spd));
-  d.hdg += (Math.random() - 0.5) * 2;
-  d.hdg = ((d.hdg % 360) + 360) % 360;
-  d.sig += (Math.random() - 0.5) * 2;
-  d.sig = Math.max(-90, Math.min(-40, d.sig));
-
-  // Trail
-  trail.push({ lat: d.lat, lon: d.lon });
-  if (trail.length > MAX_TRAIL) trail.shift();
-
-  // Alt history
-  altHistory.push(Math.round(d.alt));
-  if (altHistory.length > 60) altHistory.shift();
-
   // Update time HUD
   safe('hud-time', new Date().toISOString().substr(11,8) + ' UTC');
-
-  updateAllTelemetry();
-  drawVideoCanvas();
-  drawAltGraph();
-  updateMiniGps();
-  drawGpsCanvas();
 }
 
 function startSimulation() {
@@ -2999,7 +3073,7 @@ function refreshSatImage() {
           <div id="legend-items" style="display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--text2);">
             <div style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:8px;background:#3B9A50;border-radius:2px;display:inline-block;"></span>Vegetation</div>
             <div style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:8px;background:#1E5A98;border-radius:2px;display:inline-block;"></span>Water / Flood</div>
-            <div style="display:flex;align-items:center;gap=6px;"><span style="width:14px;height:8px;background:#B4A58C;border-radius:2px;display:inline-block;"></span>Urban / Bare</div>
+            <div style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:8px;background:#B4A58C;border-radius:2px;display:inline-block;"></span>Urban / Bare</div>
             <div style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:8px;background:#787060;border-radius:2px;display:inline-block;"></span>Hillside</div>
           </div>
         </div>
