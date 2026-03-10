@@ -15,6 +15,11 @@ app.use(cors());
 app.use(express.json()); // Allow parsing JSON bodies
 app.use(express.static('public'));
 
+// Default route to serve login if not authenticated (handled client-side usually)
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/public/index.html');
+});
+
 // --- ESP32-CAM Control Proxy ---
 // Replace this with your actual ESP32-CAM local IP address
 const ESP32_CAM_IP = 'http://192.168.1.100';

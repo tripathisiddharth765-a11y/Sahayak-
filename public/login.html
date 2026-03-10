@@ -206,7 +206,7 @@
 
                 if (data.success) {
                     sessionStorage.setItem('isLoggedIn', 'true');
-                    window.location.href = data.redirect;
+                    window.location.href = 'index.html';
                 } else {
                     error.style.display = 'block';
                     setTimeout(() => error.style.display = 'none', 3000);
